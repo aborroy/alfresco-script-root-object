@@ -1,137 +1,156 @@
-# Alfresco Script Root Object
+# Alfresco Script Root Objects – Unified Addon (ACS 25.x)
 
-This is an ACS project for Alfresco SDK 4.5 (ACS 25.2).
+A single **repository JAR** that exposes multiple **JavaScript Root Objects** for Alfresco Content Services (ACS). These objects let safe JavaScript (rules, repo web scripts, workflows) perform tasks that are blocked in sandboxed environments (e.g., `Data Dictionary > Scripts`) without using `Packages.*`.
 
-The project adds a new JavaScript Root Object `sysAdmin` using [Alfresco Repo Extension Point](https://docs.alfresco.com/content-services/latest/develop/repo-ext-points/javascript-root-objects/)
+## What’s inside (Root Objects)
 
-Alfresco Repository Spring Beans can be used from JS scripts accessing to Alfresco Web Application Context.
+* **`sysAdmin`** – Safe access to selected methods from `SysAdminParams`. 
+* **`globalProperties`** – Read values from `alfresco-global.properties` and print all properties. 
+* **`packagesScript`** – Minimal “escape hatch” to obtain WebApplicationContext and reflect class methods in a controlled way (`getContext()`, `getPackage()`, `getMethods()`). Use sparingly. 
+* **`base64`** – Streamed Base64 encode/decode helpers for content/bytes, safe in rules. 
+* **`renditionService2`** – Adds the missing `renditionService2` root object for modern renditions. 
+* **`hylandProcess`** – Start **Hyland Automate** processes via OAuth2-secured REST. 
 
-```javascript
-var context = Packages.org.springframework.web.context.ContextLoader.getCurrentWebApplicationContext();
-var sysAdminParams = context.getBean('sysAdminParams', Packages.org.alfresco.repo.admin.SysAdminParams);
-logger.log(sysAdminParams.getAlfrescoHost());
+> Opinionated advice: reach first for **`sysAdmin`**, **`globalProperties`**, **`base64`**, and **`renditionService2`** for common tasks. Keep **`packagesScript`** as a last resort to inspect or bridge gaps. Use **`hylandProcess`** when integrating ACS with Hyland Automate.
+
+## Compatibility
+
+* **ACS**: 25.2.x (works for nearby 25.x with recompile if needed) 
+* **Java**: 17 
+* **Maven**: 3.8+ 
+
+## Build
+
+```bash
+mvn clean package
+# outputs: target/<artifact>.jar
 ```
 
-However, when copying JS scripts to default folder `Repository > Data Dictionary > Scripts`, the execution environment is considered *unsafe* and source code accessing to Spring Beans using `Packages` is blocked.
+## Deploy (recommended paths)
 
-Allowing the execution of this code requires the JS script deployed with Alfresco Repository or creating an Alfresco Script Root Object to expose required methods. This project exposes some methods from `sysAdminParams` Repository Spring Bean so it can be used from JS scripts available in `Repository > Data Dictionary > Scripts` in the following way:
+### Docker overlay (recommended)
+
+Create a slim image layering the built JAR into the repository webapp:
+
+```dockerfile
+FROM alfresco/alfresco-content-repository-community:25.2.0
+COPY target/*.jar /usr/local/tomcat/webapps/alfresco/WEB-INF/lib/
+```
+
+Then reference this image in your Compose stack. 
+
+### Classic Tomcat/WAR
+
+Copy the JAR into `WEB-INF/lib` and restart:
+
+```bash
+cp target/*.jar $TOMCAT_DIR/webapps/alfresco/WEB-INF/lib/
+```
+
+## Configuration (only needed for `hylandProcess`)
+
+Add to `alfresco-global.properties`:
+
+```properties
+# OAuth token endpoint
+hyland.oauth.url=https://auth.iam.experience.hyland.com/idp/connect/token
+
+# OAuth client credentials
+hyland.oauth.clientId=<client-id>
+hyland.oauth.secret=<client-secret>
+
+# Hyland process API endpoint (default app)
+hyland.api.url=https://studio.experience.hyland.com/<process-app>/rb/v1/process-instances
+
+# Default process key
+hyland.default.processKey=Process_Default
+```
+
+You can override the API URL per call (see examples). 
+
+## Usage Examples (Rhino JS)
+
+### 1) `sysAdmin`
 
 ```javascript
 logger.log(sysAdmin.getAlfrescoHost());
 ```
 
-# Alfresco Global properties Root Object
+Use this instead of unsafe `Packages` access to `SysAdminParams`. 
+
+### 2) `globalProperties`
 
 ```javascript
-// get mail poller folder from alfresco-global.properties
 var host = globalProperties.get("alfresco.host");
 logger.log(host);
 
-// print all properties in the JavaScript Console
-// if you want to use the logger.log you'll propably need to loop through everything
+// Dump everything to the JavaScript Console (use print)
 print(globalProperties.all);
 ```
 
-# [Alfresco Base64 JavaScript Root Object](Alfresco_Base64_JavaScript_Root_Object.md)
-# [Hyland Automate Process JavasScript Object](Hyland_Automate_Process_JavaScript_Root_Object.md)
-# [Alfresco Repository JavaScript Root Object for RenditionService2](Alfresco_Repository_JavaScript_Root_Object_for_RenditionService2.md)
+### 3) `packagesScript` (advanced / inspect only)
 
-# Troubleshooting "Packages" is not defined
-
-Before 25 version you could have folder-rule which triggerd a JavaScript file with the following content:
-
-```javascript
-var context = Packages.org.springframework.web.context.ContextLoader.getCurrentWebApplicationContext();
-var sysAdminParams = context.getBean('sysAdminParams', Packages.org.alfresco.repo.admin.SysAdminParams);
-logger.log(sysAdminParams.getAlfrescoHost());
-```
-
-Now this gives the following error:
-
-`
-2025-08-26T21:27:56,820 [] ERROR [framework.webscripts.ResourceWebScriptPost] [http-nio-8080-exec-4] Exception 03fc708f-02e3-4748-bc70-8f02e30748a6. Request /alfresco/api/-default-/public/alfresco/versions/1/nodes/150398b3-7f82-4cf6-af63-c450ef6c5eb8/move executed by admin returned status code 500 with message: 07260073 Failed to execute script 'workspace://SpacesStore/08ace007-6e11-4e45-ace0-076e111e4500': 07260072 ReferenceError: "Packages" is not defined. 
-`
-
-So the following script wil work
 ```javascript
 var ctx = packagesScript.getContext();
-var sysAdminParams = ctx.getBean('sysAdminParams', packagesScript.getPackage("org.alfresco.repo.admin.SysAdminParams"));
-logger.log(sysAdminParams.getAlfrescoHost());
-```
-
-## What is done?
-
-There is a new Root Object named packagesScript
-This one has the following methods
-- getContext(), similar to the old Packages.org.springframework.web.context.ContextLoader.getCurrentWebApplicationContext();
-- getPackage(), similar to Packages.org.alfresco.repo.admin.<class>
-- getMethods(<class>), this will print all methods for the class
-
-```javascript
+var klass = packagesScript.getPackage("org.alfresco.repo.admin.SysAdminParams");
 print(packagesScript.getMethods('org.alfresco.repo.admin.SysAdminParams'));
 ```
-Will print
-```
-0 : public abstract boolean org.alfresco.repo.admin.SysAdminParams.getAllowWrite()
-1 : public abstract int org.alfresco.repo.admin.SysAdminParams.getMaxUsers()
-2 : public abstract java.util.List org.alfresco.repo.admin.SysAdminParams.getAllowedUserList()
-3 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getSitePublicGroup()
-4 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.subsituteHost(java.lang.String)
-5 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getAlfrescoProtocol()
-6 : public abstract int org.alfresco.repo.admin.SysAdminParams.getAlfrescoPort()
-7 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getAlfrescoContext()
-8 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getShareProtocol()
-9 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getShareHost()
-10 : public abstract int org.alfresco.repo.admin.SysAdminParams.getSharePort()
-11 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getShareContext()
-12 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getAlfrescoHost()
-13 : public abstract java.lang.String org.alfresco.repo.admin.SysAdminParams.getApiExplorerUrl()
+
+If you previously used:
+
+```javascript
+// Unsafe in ACS 25.x sandbox
+var context = Packages.org.springframework.web.context.ContextLoader.getCurrentWebApplicationContext();
 ```
 
-# This is an ACS project for Alfresco SDK 4.11.0.
+...replace with the `packagesScript` helpers above. 
 
-Run with `./run.sh build_start` or `./run.bat build_start` and verify that it
+### 4) `base64`
 
- * Runs Alfresco Content Service (ACS)
- * (Optional) Runs Alfresco Share
- * Runs Alfresco Search Service (ASS)
- * Runs PostgreSQL database
- * Deploys the JAR assembled module
- 
-All the services of the project are now run as docker containers. The run script offers the next tasks:
+```javascript
+// Stream-encode primary content
+var b64 = base64.encode(document);
+logger.log("B64 len: " + b64.length);
 
- * `build_start`. Build the whole project, recreate the ACS docker image, start the dockerised environment composed by ACS, Share (optional), ASS 
- and PostgreSQL and tail the logs of all the containers.
- * `build_start_it_supported`. Build the whole project including dependencies required for IT execution, recreate the ACS docker image, start the dockerised environment 
- composed by ACS, Share (optional), ASS and PostgreSQL and tail the logs of all the containers.
- * `start`. Start the dockerised environment without building the project and tail the logs of all the containers.
- * `stop`. Stop the dockerised environment.
- * `purge`. Stop the dockerised container and delete all the persistent data (docker volumes).
- * `tail`. Tail the logs of all the containers.
- * `reload_acs`. Build the ACS module, recreate the ACS docker image and restart the ACS container.
- * `build_test`. Build the whole project, recreate the ACS docker image, start the dockerised environment, execute the integration tests and stop 
- the environment.
- * `test`. Execute the integration tests (the environment must be already started).
+// Encode existing bytes (e.g., document.content)
+var s = base64.encodeBytes(document.content);
 
-## Building
-Build the code as a regular Maven project.
-
-```
-$ mvn clean package
-$ ls target/
-alfresco-script-root-object-1.0.0.jar
+// Decode back to Java byte[]
+var bytes = base64.decodeToBytes(b64);
 ```
 
-## Deploying
+Tip: prefer `encode(document)` for large files—it streams and saves memory. 
 
-Deploy this addon as a regular JAR library to Alfresco Repository WAR.
+### 5) `renditionService2`
 
+```javascript
+// List renditions for a node
+var rs = renditionService2.getRenditions(document);
+rs.forEach(function(r) { logger.log(r); });
+
+// Get a rendition by name
+logger.log(renditionService2.getRenditionByName(document, "pdf"));
+
+// Fire-and-forget render
+renditionService2.render(document, "pdf");
 ```
-$ cp alfresco-script-root-object-1.0.0.jar $TOMCAT_DIR/webapps/alfresco/WEB-INF/lib
+
+(Provides the modern `renditionService2` root object that’s otherwise missing.) 
+
+### 6) `hylandProcess`
+
+```javascript
+// Using default app + default process key from properties
+var vars = {
+  invoiceNumber: document.properties["sap:invoiceNo"],
+  amount: parseFloat(document.properties["sap:amount"] || 0),
+  customFlag: true
+};
+logger.log(hylandProcess.startProcess("Process_1748835392417", vars));
+
+// Override API URL for a different process app
+var apiUrl = "https://studio.experience.hyland.com/<another-app>/rb/v1/process-instances";
+logger.log(hylandProcess.startProcess(apiUrl, "Process_ABC123", vars));
 ```
 
-# TODO
-
-  * Create an official release
-  * Clean-up the Readme.MD
-  * Include other Root JavaScript Objects to make this library more richer
+Returns `true` on successful trigger (HTTP 2xx). Uses OAuth2 client credentials with token caching. 
